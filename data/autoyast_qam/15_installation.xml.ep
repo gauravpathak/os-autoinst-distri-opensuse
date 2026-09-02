@@ -75,6 +75,11 @@
       <trusted_grub>false</trusted_grub>
       <xen_append>crashkernel=163M</xen_append>
       <xen_kernel_append>crashkernel=163M\&lt;4G</xen_kernel_append>
+      % if ($check_var->('VERSION', '15-SP6')) {
+      <xen_kernel_append><%= $check_var->('IPMI_HW', 'AMD') ? "" : "dom0_max_vcpus=4 dom0_mem=8192M,max:8192M" %> vga=gfx-1024x768x16 loglvl=all guest_loglvl=all <%= $get_var->('XEN_EXTRA_HYPERVISOR_PARAMS', '') %></xen_kernel_append>
+      % } else {
+      <xen_kernel_append><%= $check_var->('IPMI_HW', 'AMD') ? "" : "dom0_max_vcpus=4 dom0_mem=8192M,max:8192M" %> vga=gfx-1024x768x16 loglvl=all guest_loglvl=all</xen_kernel_append>
+      % }
     </global>
     <loader_type>grub2</loader_type>
   </bootloader>
