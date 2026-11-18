@@ -177,7 +177,9 @@ sub run_left {
     # still sends packets using the default MTU, so oversized packets should trigger
     # Path MTU Discovery (PMTUD). The test verifies that ICMP(v6) Packet-Too-Big /
     # Fragmentation-Needed messages are handled correctly and the sender adjusts
-    # to the lower MTU
+    # to the lower MTU.
+    # Only the first oversized packet probes the path, see mtu_ping_cmd below,
+    # so the router answers exactly once per phase
     record_info("Test04: MTU", "MTU size in the middle decreased");
     assert_script_run("$setup->{ping_cmd} -c 8 $setup->{right_ip}");
     assert_script_run("$setup->{mtu_ping_cmd} -s 1300 -c 20 $setup->{right_ip}");
@@ -426,6 +428,11 @@ sub run {
             middle_net_02 => "10.10.2.0/24",
             route_cmd => 'ip -4 route',
             ping_cmd => 'ping',
+            # IP_PMTUDISC_WANT: the first oversized packet goes out with DF
+            # and makes the router answer with Fragmentation Needed, the rest
+            # are fragmented locally once the PMTU exception is cached. -M do
+            # would not probe more often, it only turns the later packets into
+            # a local EMSGSIZE, which would make assert_script_run fail.
             mtu_ping_cmd => 'ping -M want',
             forward_sysctl => 'net.ipv4.ip_forward=1',
         },
@@ -536,6 +543,15 @@ Test04:
     Oversized packets must trigger ICMPv6 Packet-Too-Big (or, for IPv4, ICMP
     Fragmentation-Needed) messages, visible on the incoming interface. The
     sender must adjust its path MTU and traffic must continue to flow.
+
+    The IPv4 probe is C<ping -M want>, not C<ping -M do>. Both of them make
+    the router answer only once: the left host sets DF until the ICMP
+    arrives, then caches the PMTU exception for the destination. C<-M want>
+    then fragments the following packets locally, which keeps the ping
+    successful and the test assertable, while C<-M do> would turn them into
+    a local EMSGSIZE and report 100% loss. A single answer per phase is also
+    why the middle captures across the whole phase instead of for a fixed
+    number of seconds, see C<start_phase_capture>.
 
 Test05:
     IPsec transport mode. After switching both endpoints from tunnel to
