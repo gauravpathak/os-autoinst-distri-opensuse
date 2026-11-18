@@ -207,14 +207,6 @@ sub run_middle {
     my ($dev0, $dev1) = split("\n", iface(2));
 
     assert_script_run("sysctl $setup->{forward_sysctl}");
-    if ($ip_version eq 'ipv4') {
-        # Oversized tunnel-mode ESP packets built from unrelated inner/outer
-        # routing would otherwise be dropped by the reverse-path filter once
-        # both links carry the same two hosts; disable it like l2tp3hosts.pm
-        # does for its own IPv4 router role.
-        assert_script_run("sysctl -w net.ipv4.conf.all.rp_filter=0");
-        assert_script_run("sysctl -w net.ipv4.conf.default.rp_filter=0");
-    }
     assert_script_run("ip link set $dev0 up");
     assert_script_run("ip link set $dev1 up");
 
