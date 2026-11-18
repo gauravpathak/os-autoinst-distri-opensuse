@@ -39,6 +39,7 @@ our @EXPORT_OK = qw(
   capture_tcpdump
   start_packet_capture
   stop_packet_capture
+  read_packet_capture
   count_capture_packets
   capture_statistics
   get_net_dev_pci_device
@@ -654,6 +655,34 @@ to flush the remaining packets to the pcap file.
 
 sub stop_packet_capture {
     script_run('pkill tcpdump; sleep 3');
+}
+
+=head2 read_packet_capture
+
+ read_packet_capture($pcap);
+ read_packet_capture($pcap, $filter);
+
+Decode a pcap file written by C<start_packet_capture> with C<tcpdump -nr>
+and return the packet lines as a string, in the same text format that
+C<capture_tcpdump> returns and that C<validate_tcpdump> parses. An
+optional BPF filter restricts the decoded packets further, e.g. C<'icmp'>.
+
+This pairs C<start_packet_capture>/C<stop_packet_capture> with the
+pattern-based validation, so a test can capture across a whole
+barrier-delimited phase instead of guessing a C<capture_tcpdump>
+duration that happens to overlap the traffic.
+
+C<tcpdump> is used instead of C<tshark> on purpose: a test that captures
+with C<tcpdump> already has it installed, while wireshark is a separate
+dependency.
+
+=cut
+
+sub read_packet_capture {
+    my ($pcap, $filter) = @_;
+    $filter = $filter ? " '$filter'" : '';
+
+    return script_output("tcpdump -nr $pcap$filter 2>&1", proceed_on_failure => 1);
 }
 
 =head2 count_capture_packets
