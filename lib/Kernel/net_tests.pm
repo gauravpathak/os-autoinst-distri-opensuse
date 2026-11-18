@@ -560,7 +560,7 @@ sub validate_tcpdump {
             }
             else {
                 unless ($dump =~ /ICMP6.*packet too big.*mtu\s*$mtu/i) {
-                    record_info("FAIL", "Missing ICMPv4 Fragmentation Needed (mtu=$mtu" . ($dev ? ", dev=$dev" : "") . ")",
+                    record_info("FAIL", "Missing ICMPv6 Packet Too Big (mtu=$mtu" . ($dev ? ", dev=$dev" : "") . ")",
                         result => 'fail');
                 }
             }
