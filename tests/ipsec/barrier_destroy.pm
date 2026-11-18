@@ -17,6 +17,7 @@ sub run {
     barrier_destroy('IPSEC_ROUTE_SETUP_DONE');
     barrier_destroy('IPSEC_ROUTE_SETUP_CHECK_DONE');
     barrier_destroy('IPSEC_TUNNEL_MODE_SETUP_DONE');
+    barrier_destroy('IPSEC_TUNNEL_MODE_TRAFFIC_DONE');
     barrier_destroy('IPSEC_SET_MTU_DONE');
     barrier_destroy('IPSEC_TUNNEL_MODE_CHECK_DONE');
     barrier_destroy('IPSEC_TRANSPORT_MODE_SETUP_DONE');

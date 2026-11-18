@@ -26,8 +26,88 @@ use Kernel::net_tests qw(
   config_ipsec
   dump_ipsec_debug
   validate_tcpdump
-  capture_tcpdump
+  start_packet_capture
+  stop_packet_capture
+  read_packet_capture
 );
+
+# Packets the middle/router has to show per test phase: the ESP traffic
+# between left and right, and the PMTUD replies it generates itself.
+use constant CAPTURE_FILTER => 'esp or icmp or icmp6';
+# Headers are enough for the ESP SPI and the PMTUD wording, so keep the
+# pcap small enough to decode over the serial console
+use constant CAPTURE_SNAPLEN => 128;
+
+=head2 phase_pcap
+
+ my $pcap = phase_pcap('test04', $dev);
+
+Path of the pcap file of one test phase on one interface.
+
+=cut
+
+sub phase_pcap {
+    my ($phase, $dev) = @_;
+    return "/tmp/ipsec-$phase-$dev.pcap";
+}
+
+=head2 start_phase_capture
+
+ start_phase_capture('test04', $dev0, $dev1);
+
+Start a background tcpdump per interface for one test phase. Call this
+B<before> the barrier that lets the endpoints generate the traffic of
+the phase, and C<stop_phase_capture> after the barrier they reach when
+that traffic is over. The capture then provably spans the whole phase,
+unlike a fixed C<capture_tcpdump> duration that may start late, end
+early or reach into the next phase.
+
+=cut
+
+sub start_phase_capture {
+    my ($phase, @devs) = @_;
+    my $pcaps = join(' ', map { phase_pcap($phase, $_) } @devs);
+    my $logs = join(' ', map { phase_pcap($phase, $_) . '.log' } @devs);
+
+    script_run("rm -f $pcaps $logs");
+    start_packet_capture($_, phase_pcap($phase, $_), CAPTURE_FILTER, snaplen => CAPTURE_SNAPLEN) for @devs;
+    # tcpdump needs a moment to open the devices, do not race the barrier
+    # that releases the traffic of the phase
+    sleep 2;
+    record_info("capture $phase", script_output("ps -ef | grep -e '[t]cpdump'; head -v -n 5 $logs", proceed_on_failure => 1));
+}
+
+=head2 stop_phase_capture
+
+ stop_phase_capture('test04', dev => $dev0, check => ['esp', 'pmtud'], ...);
+
+Stop the captures started by C<start_phase_capture> and validate the
+capture of one interface. The remaining arguments are passed to
+C<validate_tcpdump>.
+
+=cut
+
+sub stop_phase_capture {
+    my ($phase, %args) = @_;
+
+    stop_packet_capture;
+    return validate_phase_capture($phase, %args);
+}
+
+=head2 validate_phase_capture
+
+ validate_phase_capture('test04', dev => $dev1, check => ['esp'], ...);
+
+Decode the pcap of one interface of an already stopped phase capture and
+run C<validate_tcpdump> on it.
+
+=cut
+
+sub validate_phase_capture {
+    my ($phase, %args) = @_;
+
+    validate_tcpdump(dump => read_packet_capture(phase_pcap($phase, $args{dev})), %args);
+}
 
 sub run_left {
     my ($self, $setup) = @_;
@@ -88,6 +168,9 @@ sub run_left {
     assert_script_run("ping -c 8 $setup->{right_ip}");
     assert_script_run("$setup->{mtu_ping_cmd} -s 1300 -c 8 $setup->{right_ip}");
 
+    # tell the middle that the tunnel mode traffic is over, so that it can
+    # evaluate its capture and only then lower the MTU
+    barrier_wait('IPSEC_TUNNEL_MODE_TRAFFIC_DONE');
     barrier_wait('IPSEC_SET_MTU_DONE');
 
     # fourth test/check. Here the middle/router lowers the MTU to 1300. The left host
@@ -165,7 +248,14 @@ sub run_middle {
     record_info('IP ROUTE', script_output($setup->{route_cmd}));
 
     barrier_wait('IPSEC_ROUTE_SETUP_CHECK_DONE');
+
+    # The capture has to be running before the endpoints are released into
+    # the test phase, and it is evaluated only after they report the phase
+    # traffic as finished
+    start_phase_capture('test03', $dev0, $dev1);
+
     barrier_wait('IPSEC_TUNNEL_MODE_SETUP_DONE');
+    barrier_wait('IPSEC_TUNNEL_MODE_TRAFFIC_DONE');
 
     # Test03
     record_info("Test03: mode tunnel", "Ping over ipsec");
@@ -174,17 +264,17 @@ sub run_middle {
     # spi 0x26c44388
 
     # validate first net device
-    my $dump;
-    $dump = capture_tcpdump($dev0);
-    validate_tcpdump(dump => $dump, check => ['esp'], spi => "0x26c44388", dev => $dev0, ip_version => $ip_version,);
+    stop_phase_capture('test03', check => ['esp'], spi => "0x26c44388", dev => $dev0, ip_version => $ip_version,);
 
     # validate second net device
-    $dump = capture_tcpdump($dev1);
-    validate_tcpdump(dump => $dump, check => ['esp'], spi => "0x26c44388", dev => $dev1, ip_version => $ip_version,);
+    validate_phase_capture('test03', check => ['esp'], spi => "0x26c44388", dev => $dev1, ip_version => $ip_version,);
 
     assert_script_run("ip link set mtu 1300 dev $dev1");
 
+    start_phase_capture('test04', $dev0, $dev1);
+
     barrier_wait('IPSEC_SET_MTU_DONE');
+    barrier_wait('IPSEC_TUNNEL_MODE_CHECK_DONE');
 
     # Test04
     record_info("Test04: MTU", "MTU size in the middle decreased");
@@ -193,17 +283,16 @@ sub run_middle {
     # spi 0x26c44388
     # packet too big / fragmentation needed
     # ICMP6 Packet Too Big (ipv6) or ICMP need-to-frag (ipv4)
+    #
+    # The PMTUD reply is a single packet, emitted when left sends its first
+    # oversized packet. Only a capture that spans the whole phase is
+    # guaranteed to contain it.
 
     # validate first net device; here we check for pmtud
-    $dump = capture_tcpdump($dev0);
-    validate_tcpdump(dump => $dump, check => ['esp', 'pmtud'], spi => "0x26c44388", mtu => 1300, dev => $dev0, ip_version => $ip_version,);
+    stop_phase_capture('test04', check => ['esp', 'pmtud'], spi => "0x26c44388", mtu => 1300, dev => $dev0, ip_version => $ip_version,);
 
     # validate second net device; here pmtud won't be present
-    $dump = capture_tcpdump($dev1);
-    validate_tcpdump(dump => $dump, check => ['esp'], spi => "0x26c44388", dev => $dev1, ip_version => $ip_version,);
-
-    barrier_wait('IPSEC_TUNNEL_MODE_CHECK_DONE');
-    barrier_wait('IPSEC_TRANSPORT_MODE_SETUP_DONE');
+    validate_phase_capture('test04', check => ['esp'], spi => "0x26c44388", dev => $dev1, ip_version => $ip_version,);
 
     # TODO:
     # The same IPs are currently used as both tunnel endpoints and
@@ -218,6 +307,11 @@ sub run_middle {
     # from the tunnel endpoints, while transport-mode packets would come
     # from host IPs. Only then can tcpdump validation differentiate modes.
 
+    start_phase_capture('test05', $dev0, $dev1);
+
+    barrier_wait('IPSEC_TRANSPORT_MODE_SETUP_DONE');
+    barrier_wait('IPSEC_TRANSPORT_MODE_CHECK_DONE');
+
     # Test05
     record_info("Test05: mode transport", "Use transport mode of ipsec");
     # We expect here (for now):
@@ -225,14 +319,10 @@ sub run_middle {
     # spi 0x26c44388
 
     # validate first net device
-    $dump = capture_tcpdump($dev0);
-    validate_tcpdump(dump => $dump, check => ['esp'], spi => "0x26c44388", dev => $dev0, ip_version => $ip_version,);
+    stop_phase_capture('test05', check => ['esp'], spi => "0x26c44388", dev => $dev0, ip_version => $ip_version,);
 
     # validate second net device
-    $dump = capture_tcpdump($dev1);
-    validate_tcpdump(dump => $dump, check => ['esp'], spi => "0x26c44388", dev => $dev1, ip_version => $ip_version,);
-
-    barrier_wait('IPSEC_TRANSPORT_MODE_CHECK_DONE');
+    validate_phase_capture('test05', check => ['esp'], spi => "0x26c44388", dev => $dev1, ip_version => $ip_version,);
 }
 
 sub run_right {
@@ -290,6 +380,7 @@ sub run_right {
 
     script_run("timeout 20 tcpdump -i $dev0");
 
+    barrier_wait('IPSEC_TUNNEL_MODE_TRAFFIC_DONE');
     barrier_wait('IPSEC_SET_MTU_DONE');
 
     script_run("timeout 20 tcpdump -i $dev0");
@@ -389,6 +480,11 @@ sub post_fail_hook {
     my ($self) = @_;
     export_logs();
     record_info('INTF STATUS', script_output('ip -s link show', proceed_on_failure => 1));
+    # keep the phase captures of the middle/router for offline analysis, the
+    # decoded text in the test details only shows the filtered packets
+    stop_packet_capture;
+    my @pcaps = grep { m{^/tmp/ipsec-} } split(/\s+/, script_output('ls /tmp/ipsec-*.pcap 2>/dev/null', proceed_on_failure => 1));
+    upload_logs($_, failok => 1) foreach @pcaps;
 }
 
 1;

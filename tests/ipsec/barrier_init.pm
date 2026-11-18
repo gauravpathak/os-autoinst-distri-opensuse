@@ -19,6 +19,7 @@ sub run ($self) {
     barrier_create('IPSEC_ROUTE_SETUP_DONE', $nodes);
     barrier_create('IPSEC_ROUTE_SETUP_CHECK_DONE', $nodes);
     barrier_create('IPSEC_TUNNEL_MODE_SETUP_DONE', $nodes);
+    barrier_create('IPSEC_TUNNEL_MODE_TRAFFIC_DONE', $nodes);
     barrier_create('IPSEC_SET_MTU_DONE', $nodes);
     barrier_create('IPSEC_TUNNEL_MODE_CHECK_DONE', $nodes);
     barrier_create('IPSEC_TRANSPORT_MODE_SETUP_DONE', $nodes);
